@@ -9,7 +9,7 @@ type TopicRecord = {
   fields: {
     Question: string
     'Hashtag List'?: string[] | string
-    Viewpoints?: string[]        // linked-record array of Viewpoint IDs
+    Viewpoints?: string[]        // linked record IDs
   }
 }
 
@@ -24,34 +24,36 @@ type ViewpointRecord = {
   }
 }
 
+// Revalidate every 5 seconds
+export const revalidate = 5
+
+/** Fetch a single topic by Airtable record ID */
 async function getTopicById(id: string): Promise<TopicRecord> {
   const apiKey = process.env.AIRTABLE_API_KEY!
   const base   = process.env.NEXT_PUBLIC_AIRTABLE_BASE!
-  const table  = process.env.NEXT_PUBLIC_TOPICS_TABLE_ID!
+  const tbl    = process.env.NEXT_PUBLIC_TOPICS_TABLE_ID!
 
   const res = await fetch(
-    `https://api.airtable.com/v0/${base}/${table}/${id}`,
+    `https://api.airtable.com/v0/${base}/${tbl}/${id}`,
     {
       headers: { Authorization: `Bearer ${apiKey}` },
       cache: 'no-store',
     }
   )
-  if (!res.ok) throw new Error(`Topic fetch failed: ${res.status}`)
-  return (await res.json()) as TopicRecord
+  if (!res.ok) throw new Error(`Failed to load topic (${res.status})`)
+  return res.json()
 }
 
+/** Given a list of Viewpoint record IDs, fetch exactly those records */
 async function getViewpointsByIds(ids: string[]): Promise<ViewpointRecord[]> {
-  if (!ids.length) return []
-
+  if (ids.length === 0) return []
   const apiKey = process.env.AIRTABLE_API_KEY!
   const base   = process.env.NEXT_PUBLIC_AIRTABLE_BASE!
-  const table  = process.env.NEXT_PUBLIC_VIEWPOINTS_TABLE_ID!
-
-  // build an OR(...) filter on RECORD_ID()
-  const clauses = ids.map((rid) => `RECORD_ID()="${rid}"`).join(',')
-  const formula = encodeURIComponent(`OR(${clauses})`)
-  const url     = `https://api.airtable.com/v0/${base}/${table}?filterByFormula=${formula}&pageSize=50`
-
+  const tbl    = process.env.NEXT_PUBLIC_VIEWPOINTS_TABLE_ID!
+  const formula = encodeURIComponent(
+    `OR(${ids.map((rid) => `RECORD_ID()="${rid}"`).join(',')})`
+  )
+  const url = `https://api.airtable.com/v0/${base}/${tbl}?filterByFormula=${formula}&pageSize=50`
   const res = await fetch(url, {
     headers: { Authorization: `Bearer ${apiKey}` },
     cache: 'no-store',
@@ -59,33 +61,38 @@ async function getViewpointsByIds(ids: string[]): Promise<ViewpointRecord[]> {
   if (!res.ok) {
     const txt = await res.text()
     console.error('Airtable error:', txt)
-    throw new Error(`Viewpoints fetch failed: ${res.status}`)
+    throw new Error(`Failed to load viewpoints (${res.status})`)
   }
-  return (await res.json()).records as ViewpointRecord[]
+  const json = await res.json()
+  return json.records
 }
 
+/** Dynamically set the page title based on the topic question */
 export async function generateMetadata({
   params,
 }: {
-  params: { id: string }
+  params: Promise<{ id: string }>
 }): Promise<Metadata> {
-  const topic = await getTopicById(params.id)
+  const { id } = await params
+  const topic = await getTopicById(id)
   return { title: `Viewpointy – ${topic.fields.Question}` }
 }
 
-export const revalidate = 5
-
+/** The Topic Detail page */
 export default async function Page({
   params,
 }: {
-  params: { id: string }
+  params: Promise<{ id: string }>
 }) {
-  const { id } = params
-  const topic  = await getTopicById(id)
-  const viewIds = topic.fields.Viewpoints ?? []
+  // Unwrap the async params
+  const { id } = await params
+
+  // Load topic and its linked viewpoint IDs
+  const topic     = await getTopicById(id)
+  const viewIds   = topic.fields.Viewpoints ?? []
   const viewpoints = await getViewpointsByIds(viewIds)
 
-  // normalize hashtags
+  // Normalize the hashtag list into an array of strings
   const raw = topic.fields['Hashtag List'] ?? []
   const hashtags: string[] = Array.isArray(raw)
     ? raw
@@ -99,9 +106,7 @@ export default async function Page({
         ← Back to topics
       </Link>
 
-      <h1 className="mt-4 text-3xl font-bold">
-        {topic.fields.Question}
-      </h1>
+      <h1 className="mt-4 text-3xl font-bold">{topic.fields.Question}</h1>
       <hr className="my-4" />
 
       {hashtags.length > 0 && (
@@ -116,7 +121,7 @@ export default async function Page({
         viewpoints.map((v) => (
           <section key={v.id} className="mb-8 border rounded-lg p-4">
             {v.fields.Stance && (
-              <h2 className="text-lg font-semibold mb-2">
+              <h2 className="font-semibold text-lg mb-2">
                 {v.fields.Stance}
               </h2>
             )}
