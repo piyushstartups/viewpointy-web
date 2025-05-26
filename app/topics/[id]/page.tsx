@@ -1,149 +1,131 @@
-// app/topics/[id]/page.tsx
+"use client";
 
-import Link from 'next/link'
-import { Metadata } from 'next'
+import Link from "next/link";
+import { notFound } from "next/navigation";
 
-/** One row from your Topics table */
 type TopicRecord = {
-  id: string
+  id: string;
   fields: {
-    Question: string
-    'Hashtag List'?: string[] | string
-    Viewpoints?: string[]        // linked record IDs
-  }
-}
+    Name: string;
+    Question: string;
+    "Hashtag List"?: string[];
+  };
+};
 
-/** One row from your Viewpoints table */
 type ViewpointRecord = {
-  id: string
+  id: string;
   fields: {
-    Text: string
-    URL?: string
-    Author?: string
-    Stance?: 'For' | 'Against' | 'Mixed'
-  }
-}
+    Text: string;
+    URL: string;
+    Author: string;
+    Stance: string;
+  };
+};
 
-// Revalidate every 5 seconds
-export const revalidate = 5
+async function getTopic(id: string): Promise<TopicRecord | null> {
+  const base = process.env.NEXT_PUBLIC_AIRTABLE_BASE;
+  const table = process.env.NEXT_PUBLIC_TOPICS_TABLE_ID;
+  const key = process.env.AIRTABLE_API_KEY;
 
-/** Fetch a single topic by Airtable record ID */
-async function getTopicById(id: string): Promise<TopicRecord> {
-  const apiKey = process.env.AIRTABLE_API_KEY!
-  const base   = process.env.NEXT_PUBLIC_AIRTABLE_BASE!
-  const tbl    = process.env.NEXT_PUBLIC_TOPICS_TABLE_ID!
+  const url =
+    `https://api.airtable.com/v0/${base}/${table}` +
+    `?filterByFormula=RECORD_ID()="${id}"`;
 
-  const res = await fetch(
-    `https://api.airtable.com/v0/${base}/${tbl}/${id}`,
-    {
-      headers: { Authorization: `Bearer ${apiKey}` },
-      cache: 'no-store',
-    }
-  )
-  if (!res.ok) throw new Error(`Failed to load topic (${res.status})`)
-  return res.json()
-}
-
-/** Given a list of Viewpoint record IDs, fetch exactly those records */
-async function getViewpointsByIds(ids: string[]): Promise<ViewpointRecord[]> {
-  if (ids.length === 0) return []
-  const apiKey = process.env.AIRTABLE_API_KEY!
-  const base   = process.env.NEXT_PUBLIC_AIRTABLE_BASE!
-  const tbl    = process.env.NEXT_PUBLIC_VIEWPOINTS_TABLE_ID!
-  const formula = encodeURIComponent(
-    `OR(${ids.map((rid) => `RECORD_ID()="${rid}"`).join(',')})`
-  )
-  const url = `https://api.airtable.com/v0/${base}/${tbl}?filterByFormula=${formula}&pageSize=50`
   const res = await fetch(url, {
-    headers: { Authorization: `Bearer ${apiKey}` },
-    cache: 'no-store',
-  })
+    headers: { Authorization: `Bearer ${key}` },
+  });
+
+  if (!res.ok) return null;
+  const data = await res.json();
+  return data.records[0] || null;
+}
+
+async function getViewpoints(id: string): Promise<ViewpointRecord[]> {
+  const base = process.env.NEXT_PUBLIC_AIRTABLE_BASE;
+  const table = process.env.NEXT_PUBLIC_VIEWPOINTS_TABLE_ID;
+  const key = process.env.AIRTABLE_API_KEY;
+
+  const url =
+    `https://api.airtable.com/v0/${base}/${table}` +
+    `?filterByFormula={Topic}="${id}"&pageSize=20`;
+
+  const res = await fetch(url, {
+    headers: { Authorization: `Bearer ${key}` },
+  });
+
   if (!res.ok) {
-    const txt = await res.text()
-    console.error('Airtable error:', txt)
-    throw new Error(`Failed to load viewpoints (${res.status})`)
+    const err = await res.text();
+    console.error("🛠️  Airtable error body:", err);
+    throw new Error(`Views fetch failed: ${res.status}`);
   }
-  const json = await res.json()
-  return json.records
+
+  const data = await res.json();
+  return data.records;
 }
 
-/** Dynamically set the page title based on the topic question */
-export async function generateMetadata({
-  params,
-}: {
-  params: Promise<{ id: string }>
-}): Promise<Metadata> {
-  const { id } = await params
-  const topic = await getTopicById(id)
-  return { title: `Viewpointy – ${topic.fields.Question}` }
-}
-
-/** The Topic Detail page */
 export default async function Page({
   params,
 }: {
-  params: Promise<{ id: string }>
+  params: { id: string };
 }) {
-  // Unwrap the async params
-  const { id } = await params
+  const topic = await getTopic(params.id);
+  if (!topic) return notFound();
 
-  // Load topic and its linked viewpoint IDs
-  const topic     = await getTopicById(id)
-  const viewIds   = topic.fields.Viewpoints ?? []
-  const viewpoints = await getViewpointsByIds(viewIds)
-
-  // Normalize the hashtag list into an array of strings
-  const raw = topic.fields['Hashtag List'] ?? []
-  const hashtags: string[] = Array.isArray(raw)
-    ? raw
-    : typeof raw === 'string'
-    ? raw.split(/[\s,]+/).filter(Boolean)
-    : []
+  const viewpoints = await getViewpoints(params.id);
 
   return (
     <main className="max-w-xl mx-auto p-4">
-      <Link href="/" className="text-sm text-blue-600 hover:underline">
+      <Link href="/">
         ← Back to topics
       </Link>
 
-      <h1 className="mt-4 text-3xl font-bold">{topic.fields.Question}</h1>
+      <h1 className="mt-4 text-3xl font-bold">
+        {topic.fields.Question}
+      </h1>
       <hr className="my-4" />
 
-      {hashtags.length > 0 && (
+      {topic.fields["Hashtag List"]?.length ? (
         <p className="text-gray-600 mb-6">
-          {hashtags.map((h) => (h.startsWith('#') ? h : `#${h}`)).join(' ')}
+          {topic.fields["Hashtag List"].map((h) => `#${h}`).join(" ")}
         </p>
-      )}
+      ) : null}
 
       {viewpoints.length === 0 ? (
         <p className="text-gray-500">No viewpoints collected yet.</p>
       ) : (
-        viewpoints.map((v) => (
-          <section key={v.id} className="mb-8 border rounded-lg p-4">
-            {v.fields.Stance && (
-              <h2 className="font-semibold text-lg mb-2">
-                {v.fields.Stance}
+        ["For", "Against", "Mixed"].map((stance) => {
+          const group = viewpoints.filter(
+            (v) => v.fields.Stance === stance
+          );
+          if (!group.length) return null;
+          return (
+            <section key={stance} className="mb-8">
+              <h2 className="text-2xl font-semibold mb-4">
+                {stance}
               </h2>
-            )}
-            <p className="mb-2">{v.fields.Text}</p>
-            {v.fields.URL && (
-              <a
-                href={v.fields.URL}
-                target="_blank"
-                rel="noreferrer"
-                className="text-sm text-blue-600 hover:underline"
-              >
-                Read source
-              </a>
-            )}
-            {v.fields.Author && (
-              <p className="mt-2 text-sm text-gray-500">
-                — {v.fields.Author}
-              </p>
-            )}
-          </section>
-        ))
+              {group.map((v) => (
+                <blockquote
+                  key={v.id}
+                  className="border rounded-lg p-4 mb-4"
+                >
+                  <p>{v.fields.Text}</p>
+                  <a
+                    href={v.fields.URL}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="block mt-2 text-sm text-blue-600"
+                  >
+                    Read source
+                  </a>
+                  <cite className="block mt-1 text-sm text-gray-500">
+                    — {v.fields.Author}
+                  </cite>
+                </blockquote>
+              ))}
+            </section>
+          );
+        })
       )}
     </main>
-  )
+  );
 }
